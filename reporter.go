@@ -19,11 +19,12 @@ import (
 )
 
 type ReporterOptions struct {
-	ProjectID string
-	Zone      string
-	StatePath string
-	Interval  time.Duration
-	SlackURL  string
+	ProjectID   string
+	ChannelName string
+	Zone        string
+	StatePath   string
+	Interval    time.Duration
+	SlackURL    string
 }
 
 type Reporter struct {
@@ -194,7 +195,9 @@ func (reporter *Reporter) addOperation(op *container.Operation) error {
 		} else {
 			title = "Operation started"
 		}
-		message := slackhook.Message{}
+		message := slackhook.Message{
+			Channel: reporter.options.ChannelName,
+		}
 		message.AddAttachment(&slackhook.Attachment{
 			Title: title,
 			Text:  op.OperationType,

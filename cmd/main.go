@@ -19,6 +19,8 @@ func main() {
 		"Slack webhook URL (required).")
 	pflag.StringVarP(&options.Zone, "zone", "z", "",
 		"Zone (defaults to all zones).")
+	pflag.StringVar(&options.ChannelName, "channel", "",
+		"Channel (overrides Slack configuration).")
 	pflag.IntVarP(&intervalSecs, "interval", "i", intervalSecs,
 		"Polling interval, in seconds (> 0).")
 	pflag.Parse()
