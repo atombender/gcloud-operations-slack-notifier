@@ -1,5 +1,8 @@
 .git
+.gitignore
 *.db
 build/
 vendor/
 Makefile
+*.md
+LICENSE
