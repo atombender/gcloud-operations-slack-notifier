@@ -1,5 +1,7 @@
 default: all
 
+VERSION = 1.0.0
+
 BUILD_DIR = $(PWD)/build
 
 GO = go
@@ -21,4 +23,10 @@ build:
 
 binaries: $(BINARIES)
 
-.PHONY: default all clean build binaries
+docker-push:
+	docker build -t atombender/gcloud-operations-slack-notifier:v$(VERSION) .
+	docker tag atombender/gcloud-operations-slack-notifier:v$(VERSION) atombender/gcloud-operations-slack-notifier:latest
+	docker push atombender/gcloud-operations-slack-notifier:v$(VERSION)
+	docker push atombender/gcloud-operations-slack-notifier:latest
+
+.PHONY: default all clean build binaries docker-push
