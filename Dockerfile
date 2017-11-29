@@ -11,5 +11,6 @@ RUN \
   && go build -o /notifier github.com/atombender/gcloud-operations-slack-notifier/cmd
 
 FROM golang:1.9-alpine
-COPY --from=build /notifier /srv/
-ENTRYPOINT ['/srv/notifier']
+RUN mkdir -p /srv
+COPY --from=build /notifier /srv/notifier
+ENTRYPOINT ["/srv/notifier"]
