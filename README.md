@@ -20,6 +20,8 @@ $ ./notifier \
   --slack-url=https://hooks.slack.com/services/...
 ```
 
+An internal database `state.db` will be written to the current directory. It is used to maintain the state about what's been sent to Slack, so that on the next setup, duplicate events are not reported.
+
 # License
 
 MIT. See `LICENSE`.
