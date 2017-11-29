@@ -1,0 +1,49 @@
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  name: gcloud-operations-slack-notifier
+  labels:
+    app: gcloud-operations-slack-notifier
+spec:
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: gcloud-operations-slack-notifier
+      annotations:
+        # This is a critical pod
+        scheduler.alpha.kubernetes.io/critical-pod: ''
+    spec:
+      containers:
+      - name: notifier
+        image: atombender/gcloud-operations-slack-notifier:v{{ .Values.version }}
+        imagePullPolicy: IfNotPresent
+        workingDir: /mnt/state
+        args:
+        # Project and Slack URL
+        - --project=...
+        - --slack-url=...
+        resources:
+          # QoS level "guaranteed"
+          requests:
+            cpu: 0.01
+            memory: '20M'
+          limits:
+            cpu: 0.5
+            memory: '20M'
+        env:
+        - name: GOOGLE_APPLICATION_CREDENTIALS
+          value: /var/run/secret/cloud.google.com/service-account.json
+        volumeMounts:
+        - name: service-account
+          mountPath: /var/run/secret/cloud.google.com/service-account.json
+          subPath: service-account.json
+          readOnly: true
+        - name: empty
+          mountPath: /mnt/state
+      volumes:
+      - name: empty
+        emptyDir:
+      - name: service-account
+        secret:
+          secretName: gcloud-operations-slack-notifier
