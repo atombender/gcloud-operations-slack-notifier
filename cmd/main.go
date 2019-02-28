@@ -4,17 +4,18 @@ import (
 	"log"
 	"time"
 
-	"github.com/ogier/pflag"
+	"github.com/spf13/pflag"
 
-	"github.com/atombender/gcloud-operations-slack-notifier"
+	notifier "github.com/atombender/gcloud-operations-slack-notifier"
 )
 
 func main() {
 	options := notifier.ReporterOptions{}
+
 	var intervalSecs = 30
 
-	pflag.StringVarP(&options.ProjectID, "project", "p", "",
-		"Project ID (required).")
+	pflag.StringSliceVarP(&options.ProjectIDs, "project", "p", nil,
+		"Project ID (required; multiple can be provided).")
 	pflag.StringVar(&options.SlackURL, "slack-url", "",
 		"Slack webhook URL (required).")
 	pflag.StringVarP(&options.Zone, "zone", "z", "",

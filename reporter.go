@@ -18,8 +18,10 @@ import (
 	container "google.golang.org/api/container/v1"
 )
 
+const ageThresholdForDisplayingTime = 3 * time.Minute
+
 type ReporterOptions struct {
-	ProjectID   string
+	ProjectIDs  []string
 	ChannelName string
 	Zone        string
 	StatePath   string
@@ -43,8 +45,8 @@ func NewReporter(options ReporterOptions) (*Reporter, error) {
 		return nil, errors.New("Slack URL must be specified")
 	}
 
-	if options.ProjectID == "" {
-		return nil, errors.New("Project ID must be specified")
+	if len(options.ProjectIDs) == 0 {
+		return nil, errors.New("At least one project ID must be specified")
 	}
 
 	if options.StatePath == "" {
@@ -97,14 +99,17 @@ func NewReporter(options ReporterOptions) (*Reporter, error) {
 	return &reporter, nil
 }
 
-func (reporter *Reporter) Close() {
+func (reporter *Reporter) Shutdown() {
 	if reporter.db != nil {
 		reporter.db.Close()
+		reporter.db = nil
 	}
 }
 
 func (reporter *Reporter) Run() {
-	if err := reporter.DoIteration(); err != nil {
+	ctx := context.Background()
+
+	if err := reporter.doIteration(ctx); err != nil {
 		log.Fatal(err)
 	}
 	if err := reporter.setSyncState(syncStateIncremental); err != nil {
@@ -115,23 +120,22 @@ func (reporter *Reporter) Run() {
 	for {
 		select {
 		case <-timer:
-			if err := reporter.DoIteration(); err != nil {
+			if err := reporter.doIteration(ctx); err != nil {
 				log.Fatal(err)
 			}
 		}
 	}
 }
 
-func (reporter *Reporter) DoIteration() error {
+func (reporter *Reporter) doIteration(ctx context.Context) error {
 	boff := &backoff.Backoff{
 		Min:    100 * time.Millisecond,
 		Max:    10 * time.Second,
 		Factor: 2,
 		Jitter: false,
 	}
-
 	for {
-		err := reporter.Poll()
+		err := reporter.poll(ctx)
 		if err == nil {
 			return nil
 		}
@@ -143,9 +147,7 @@ func (reporter *Reporter) DoIteration() error {
 	}
 }
 
-func (reporter *Reporter) Poll() error {
-	ctx := context.Background()
-
+func (reporter *Reporter) poll(ctx context.Context) error {
 	c, err := google.DefaultClient(ctx, container.CloudPlatformScope)
 	if err != nil {
 		log.Fatal(err)
@@ -161,22 +163,27 @@ func (reporter *Reporter) Poll() error {
 		zone = "-"
 	}
 
-	log.Printf("Polling for operations")
-	resp, err := containerService.Projects.Zones.Operations.List(
-		reporter.options.ProjectID, zone).Context(ctx).Do()
-	if err != nil {
-		return errors.Wrap(err, "Unable to list operations")
-	}
-	for _, op := range resp.Operations {
-		if err := reporter.addOperation(op); err != nil {
-			return errors.Wrap(err, "Unable to record an operation")
+	for _, projectID := range reporter.options.ProjectIDs {
+		log.Printf("Polling for operations for project %s", projectID)
+		resp, err := containerService.Projects.Zones.Operations.List(
+			projectID, zone).Context(ctx).Do()
+		if err != nil {
+			return errors.Wrap(err, "Unable to list operations")
+		}
+		for _, op := range resp.Operations {
+			log.Printf("OP %#v", op)
+			if err := reporter.addOperation(projectID, op); err != nil {
+				return errors.Wrap(err, "Unable to record an operation")
+			}
 		}
 	}
 	return nil
 }
 
-func (reporter *Reporter) addOperation(op *container.Operation) error {
-	entry, err := reporter.getEntry(op)
+func (reporter *Reporter) addOperation(
+	projectID string,
+	op *container.Operation) error {
+	entry, err := reporter.getEntry(projectID, op)
 	if err != nil {
 		return err
 	}
@@ -187,72 +194,87 @@ func (reporter *Reporter) addOperation(op *container.Operation) error {
 
 	shouldReport := reporter.syncState == "incremental"
 	if shouldReport {
-		log.Printf("Notifying Slash with operation %#v", op)
-
-		var title string
-		if op.EndTime != "" {
-			title = "Operation ended"
-		} else {
-			title = "Operation started"
-		}
-		message := slackhook.Message{
-			Channel: reporter.options.ChannelName,
-		}
-		message.AddAttachment(&slackhook.Attachment{
-			Title: title,
-			Text:  op.OperationType,
-		})
-
-		ageThresholdForDisplayingTime := 3 * time.Minute
-
-		var includeTime bool
-		var startTime time.Time
-		if t, err := time.Parse(time.RFC3339Nano, op.StartTime); err == nil {
-			startTime = t
-		} else {
+		if err := reporter.reportOperation(projectID, op); err != nil {
 			return err
 		}
-		includeTime = time.Since(startTime) > ageThresholdForDisplayingTime
-		if !includeTime && op.EndTime != "" {
-			if t, err := time.Parse(time.RFC3339Nano, op.EndTime); err == nil {
-				includeTime = time.Since(t) > ageThresholdForDisplayingTime
-			}
-		}
-		if includeTime {
-			message.AddAttachment(&slackhook.Attachment{
-				Title: "Since",
-				Text:  humanize.Time(startTime),
-			})
-		}
+	} else {
+		log.Printf("Not reporting operation as we're not incremental yet: %s", op.Name)
+	}
 
-		if op.Status != "" {
-			var status string
-			if op.StatusMessage != "" {
-				status = fmt.Sprintf("%s — %s", op.Status, op.StatusMessage)
-			} else {
-				status = op.Status
-			}
-			if status != "" {
-				message.AddAttachment(&slackhook.Attachment{
-					Title: "Status",
-					Text:  status,
-				})
-			}
+	return reporter.saveEntry(projectID, op)
+}
+
+func (reporter *Reporter) reportOperation(
+	projectID string,
+	op *container.Operation) error {
+	log.Printf("Notifying Slash with operation %#v", op)
+
+	var title string
+	if op.EndTime != "" {
+		title = "Operation ended"
+	} else {
+		title = "Operation started"
+	}
+	message := slackhook.Message{
+		Channel: reporter.options.ChannelName,
+	}
+	message.AddAttachment(&slackhook.Attachment{
+		Title: title,
+		Text:  op.OperationType,
+	})
+
+	if startTime := reporter.getStartTime(op); startTime != nil {
+		message.AddAttachment(&slackhook.Attachment{
+			Title: "Since",
+			Text:  humanize.Time(*startTime),
+		})
+	}
+
+	if op.Status != "" {
+		var status string
+		if op.StatusMessage != "" {
+			status = fmt.Sprintf("%s — %s", op.Status, op.StatusMessage)
+		} else {
+			status = op.Status
 		}
-		if err := reporter.slackClient.Send(&message); err != nil {
-			return SlackNotificationError{Err: err}
+		if status != "" {
+			message.AddAttachment(&slackhook.Attachment{
+				Title: "Status",
+				Text:  status,
+			})
 		}
 	}
 
-	return reporter.saveEntry(op)
+	if err := reporter.slackClient.Send(&message); err != nil {
+		return SlackNotificationError{Err: err}
+	}
+	return nil
 }
 
-func (reporter *Reporter) saveEntry(op *container.Operation) error {
+func (reporter *Reporter) getStartTime(op *container.Operation) *time.Time {
+	startTime, err := time.Parse(time.RFC3339Nano, op.StartTime)
+	if err != nil {
+		return nil
+	}
+
+	includeTime := time.Since(startTime) > ageThresholdForDisplayingTime
+	if !includeTime && op.EndTime != "" {
+		if t, err := time.Parse(time.RFC3339Nano, op.EndTime); err == nil {
+			includeTime = time.Since(t) > ageThresholdForDisplayingTime
+		}
+	}
+	if includeTime {
+		return &startTime
+	}
+	return nil
+}
+
+func (reporter *Reporter) saveEntry(projectID string, op *container.Operation) error {
 	return reporter.db.Batch(func(tx *bolt.Tx) error {
 		entry := Entry{
 			Name:      op.Name,
 			Zone:      op.Zone,
-			ProjectID: reporter.options.ProjectID,
+			ProjectID: projectID,
 			Timestamp: time.Now(),
 			Status:    op.Status,
 		}
@@ -260,18 +282,22 @@ func (reporter *Reporter) saveEntry(op *container.Operation) error {
 		if err != nil {
 			return err
 		}
-		return tx.Bucket(bucketName).Put(reporter.keyForOperation(op), b)
+		return tx.Bucket(bucketName).Put(reporter.keyForOperation(projectID, op), b)
 	})
 }
 
-func (reporter *Reporter) keyForOperation(op *container.Operation) []byte {
-	return []byte(fmt.Sprintf("%s--%s--%s", reporter.options.ProjectID, op.Zone, op.Name))
+func (reporter *Reporter) keyForOperation(
+	projectID string,
+	op *container.Operation) []byte {
+	return []byte(fmt.Sprintf("%s--%s--%s", projectID, op.Zone, op.Name))
 }
 
-func (reporter *Reporter) getEntry(op *container.Operation) (*Entry, error) {
+func (reporter *Reporter) getEntry(
+	projectID string,
+	op *container.Operation) (*Entry, error) {
 	var entry *Entry
 	err := reporter.db.View(func(tx *bolt.Tx) error {
-		b := tx.Bucket(bucketName).Get(reporter.keyForOperation(op))
+		b := tx.Bucket(bucketName).Get(reporter.keyForOperation(projectID, op))
 		if b == nil {
 			return nil
 		}
