@@ -1,16 +1,15 @@
-FROM golang:1.9-alpine AS build
-RUN \
-     apk update \
-  && apk add git \
-  && go get -u github.com/golang/dep/cmd/dep
+ARG GO_VERSION=1.12
+
+FROM golang:${GO_VERSION}-alpine AS build
+RUN apk update && apk add git
 RUN mkdir -p /go/src/github.com/atombender/gcloud-operations-slack-notifier
 WORKDIR /go/src/github.com/atombender/gcloud-operations-slack-notifier/
-COPY . .
-RUN \
-     dep ensure \
-  && go build -o /notifier github.com/atombender/gcloud-operations-slack-notifier/cmd
+ENV GO111MODULE=on
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . ./
+RUN CGO_ENABLED=0 go build -o /notifier ./cmd
 
-FROM golang:1.9-alpine
-RUN mkdir -p /srv
-COPY --from=build /notifier /srv/notifier
-ENTRYPOINT ["/srv/notifier"]
+FROM scratch
+COPY --from=build /notifier /notifier
+ENTRYPOINT ["/notifier"]
