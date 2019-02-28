@@ -209,40 +209,35 @@ func (reporter *Reporter) reportOperation(
 	op *container.Operation) error {
 	log.Printf("Notifying Slash with operation %#v", op)
 
-	var title string
-	if op.EndTime != "" {
-		title = "Operation ended"
-	} else {
-		title = "Operation started"
+	title := fmt.Sprintf("Cluster operation `%s`", op.OperationType)
+	if op.Status != "" {
+		title += fmt.Sprintf(" is `%s`", op.Status)
+		if op.StatusMessage != "" {
+			title += fmt.Sprintf(": %s", op.StatusMessage)
+		}
 	}
+
 	message := slackhook.Message{
 		Channel: reporter.options.ChannelName,
+		Text:    title,
 	}
+
 	message.AddAttachment(&slackhook.Attachment{
-		Title: title,
-		Text:  op.OperationType,
+		Title: "Project",
+		Text:  fmt.Sprintf("`%s`", projectID),
 	})
+	if reporter.options.Zone != "" && op.Zone != reporter.options.Zone {
+		message.AddAttachment(&slackhook.Attachment{
+			Title: "Zone",
+			Text:  fmt.Sprintf("`%s`", op.Zone),
+		})
+	}
 
 	if startTime := reporter.getStartTime(op); startTime != nil {
 		message.AddAttachment(&slackhook.Attachment{
 			Title: "Since",
 			Text:  humanize.Time(*startTime),
 		})
-	}
-
-	if op.Status != "" {
-		var status string
-		if op.StatusMessage != "" {
-			status = fmt.Sprintf("%s — %s", op.Status, op.StatusMessage)
-		} else {
-			status = op.Status
-		}
-		if status != "" {
-			message.AddAttachment(&slackhook.Attachment{
-				Title: "Status",
-				Text:  status,
-			})
-		}
 	}
 
 	if err := reporter.slackClient.Send(&message); err != nil {
