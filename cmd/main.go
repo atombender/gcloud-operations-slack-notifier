@@ -32,5 +32,6 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	defer reporter.Shutdown()
 	reporter.Run()
 }
