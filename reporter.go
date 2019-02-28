@@ -171,7 +171,6 @@ func (reporter *Reporter) poll(ctx context.Context) error {
 			return errors.Wrap(err, "Unable to list operations")
 		}
 		for _, op := range resp.Operations {
-			log.Printf("OP %#v", op)
 			if err := reporter.addOperation(projectID, op); err != nil {
 				return errors.Wrap(err, "Unable to record an operation")
 			}
